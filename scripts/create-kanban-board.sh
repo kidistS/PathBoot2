@@ -172,7 +172,7 @@ issue_info=$(create_issue \
 Implement a classifier that routes incoming questions to the correct domain agent (NAV, Tax, or Immigration) so each agent can apply the most relevant prompt strategy and document set.
 
 ## Acceptance Criteria
-- [ ] Router correctly classifies at least 80 % of representative test queries per domain
+- [ ] Router correctly classifies at least 80% of representative test queries per domain
 - [ ] Unrecognized queries fall back to a generic response (not an error)
 - [ ] Domain selection is logged with the session ID
 - [ ] Unit tests cover router logic for all three domains
@@ -427,6 +427,7 @@ Implement the core chat interface: a message thread pane and a sidebar listing p
 - [ ] Sidebar lists sessions with timestamps and previews
 - [ ] Selecting a session loads its full history
 - [ ] New chat button creates a fresh session
+- [ ] Unit/integration tests cover message rendering, session switching, and new chat creation
 
 ## Priority
 Should have
@@ -575,7 +576,7 @@ issue_info=$(create_issue \
 Style the chat interface and session sidebar using Tailwind CSS with a mobile-first approach so the app is fully usable on small screens and scales gracefully to desktop.
 
 ## Acceptance Criteria
-- [ ] Chat interface is fully functional on viewports ≥ 320 px wide
+- [ ] Chat interface is fully functional on viewports ≥ 360 px wide
 - [ ] Sidebar collapses to a drawer / hamburger menu on small screens
 - [ ] Layout tested on Chrome DevTools at 375 px, 768 px, and 1440 px
 - [ ] No horizontal scroll on any supported viewport
@@ -653,7 +654,7 @@ issue_info=$(create_issue \
 Detect and redact personally identifiable information (names, national ID numbers, addresses) from user messages before they are sent to the LLM or logged, reducing privacy risk.
 
 ## Acceptance Criteria
-- [ ] Common Norwegian PII patterns (personnummer, name patterns) are detected
+- [ ] Common Norwegian PII patterns (personnummer — national identity number — and name patterns) are detected
 - [ ] Detected PII is redacted or anonymised before LLM processing and logging
 - [ ] Redaction events are audited (redaction occurred, not the PII itself)
 - [ ] Redaction can be toggled per environment via configuration

@@ -15,16 +15,19 @@
 #
 # Usage:
 #   export GH_TOKEN=<your-token>   # or: gh auth login
-#   bash scripts/create-kanban-board.sh
+#   bash scripts/create-kanban-board.sh [REPO] [OWNER]
+#
+#   Defaults are inferred from `gh repo view` when not supplied.
 
 set -euo pipefail
 
-REPO="kidistS/PathBoot2"
+# Resolve REPO and OWNER from arguments, environment, or git remote.
+REPO="${1:-${REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}}"
+OWNER="${2:-${OWNER:-$(gh repo view --json owner -q .owner.login)}}"
 PROJECT_TITLE="GovAI Assistant — Kanban Board"
-OWNER="kidistS"
 
 # ---------------------------------------------------------------------------
-# Helper: create an issue and return its node ID (for Projects v2)
+# Helper: create an issue and return "NUMBER:NODE_ID"
 # ---------------------------------------------------------------------------
 create_issue() {
   local title="$1"
@@ -36,8 +39,8 @@ create_issue() {
     --title "$title" \
     --body "$body" \
     --label "$label" \
-    --json id,number,nodeId \
-    --jq '.nodeId'
+    --json number,nodeId \
+    --jq '"\(.number):\(.nodeId)"'
 }
 
 # ---------------------------------------------------------------------------
@@ -94,35 +97,47 @@ gh project field-create "$PROJECT_NUMBER" \
   --single-select-options "Must have,Should have,Nice to have" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# 5. Create issues and add to project
+# 5. Cache project-level IDs once (avoids repeated identical API calls)
+# ---------------------------------------------------------------------------
+echo "==> Fetching project field metadata..."
+FIELDS_JSON=$(gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json)
+PROJECT_ID=$(gh project view "$PROJECT_NUMBER" --owner "$OWNER" --format json --jq '.id')
+
+STATUS_FIELD_ID=$(echo "$FIELDS_JSON" | jq -r '.fields[] | select(.name=="Status") | .id')
+BACKLOG_OPTION_ID=$(echo "$FIELDS_JSON" | jq -r '.fields[] | select(.name=="Status") | .options[] | select(.name=="Backlog") | .id')
+
+PRIORITY_FIELD_ID=$(echo "$FIELDS_JSON" | jq -r '.fields[] | select(.name=="Priority") | .id')
+MUST_HAVE_OPTION_ID=$(echo "$FIELDS_JSON" | jq -r '.fields[] | select(.name=="Priority") | .options[] | select(.name=="Must have") | .id')
+SHOULD_HAVE_OPTION_ID=$(echo "$FIELDS_JSON" | jq -r '.fields[] | select(.name=="Priority") | .options[] | select(.name=="Should have") | .id')
+NICE_TO_HAVE_OPTION_ID=$(echo "$FIELDS_JSON" | jq -r '.fields[] | select(.name=="Priority") | .options[] | select(.name=="Nice to have") | .id')
+
+# ---------------------------------------------------------------------------
+# 6. Create issues and add to project
 # ---------------------------------------------------------------------------
 add_to_project() {
-  local node_id="$1"
-  local priority="$2"
+  local issue_number="$1"
+  local priority_option_id="$2"
 
   item_id=$(gh project item-add "$PROJECT_NUMBER" \
     --owner "$OWNER" \
-    --url "https://github.com/$REPO/issues/$(
-      gh issue list --repo "$REPO" --json nodeId,number \
-        --jq ".[] | select(.nodeId==\"$node_id\") | .number"
-    )" \
+    --url "https://github.com/$REPO/issues/$issue_number" \
     --format json \
     --jq '.id' 2>/dev/null) || return 0
 
   # Set Status = Backlog
   gh project item-edit \
-    --project-id "$(gh project view "$PROJECT_NUMBER" --owner "$OWNER" --format json --jq '.id')" \
+    --project-id "$PROJECT_ID" \
     --id "$item_id" \
-    --field-id "$(gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json --jq '.fields[] | select(.name=="Status") | .id')" \
-    --single-select-option-id "$(gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json --jq '.fields[] | select(.name=="Status") | .options[] | select(.name=="Backlog") | .id')" \
+    --field-id "$STATUS_FIELD_ID" \
+    --single-select-option-id "$BACKLOG_OPTION_ID" \
     2>/dev/null || true
 
   # Set Priority
   gh project item-edit \
-    --project-id "$(gh project view "$PROJECT_NUMBER" --owner "$OWNER" --format json --jq '.id')" \
+    --project-id "$PROJECT_ID" \
     --id "$item_id" \
-    --field-id "$(gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json --jq '.fields[] | select(.name=="Priority") | .id')" \
-    --single-select-option-id "$(gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json --jq ".fields[] | select(.name==\"Priority\") | .options[] | select(.name==\"$priority\") | .id")" \
+    --field-id "$PRIORITY_FIELD_ID" \
+    --single-select-option-id "$priority_option_id" \
     2>/dev/null || true
 }
 
@@ -131,7 +146,7 @@ echo "==> Creating issues..."
 
 # --- Must have (MVP) -----------------------------------------------------------
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Implement single chat API endpoint with session support" \
   "## Description
 Expose a \`POST /api/chat\` endpoint that accepts a user message and session ID, maintains conversation history for that session, and returns an assistant response.
@@ -149,9 +164,9 @@ Must have (MVP)
 ## README Section
 Backlog & Priorities → Must have (MVP)" \
   "must-have")
-add_to_project "$node_id" "Must have"
+add_to_project "${issue_info%%:*}" "$MUST_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Build domain router (NAV / Tax / Immigration classification)" \
   "## Description
 Implement a classifier that routes incoming questions to the correct domain agent (NAV, Tax, or Immigration) so each agent can apply the most relevant prompt strategy and document set.
@@ -168,9 +183,9 @@ Must have (MVP)
 ## README Section
 Backlog & Priorities → Must have (MVP)" \
   "must-have")
-add_to_project "$node_id" "Must have"
+add_to_project "${issue_info%%:*}" "$MUST_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Implement RAG retrieval with a curated dataset" \
   "## Description
 Set up a retrieval-augmented generation pipeline: embed a small curated document set, store vectors, and retrieve the top-k most relevant chunks for each query before prompt composition.
@@ -187,9 +202,9 @@ Must have (MVP)
 ## README Section
 Backlog & Priorities → Must have (MVP)" \
   "must-have")
-add_to_project "$node_id" "Must have"
+add_to_project "${issue_info%%:*}" "$MUST_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Integrate Ollama (Mistral for chat; embedding model for RAG)" \
   "## Description
 Wire up the Spring Boot backend to a locally running Ollama instance, using Mistral for chat completions and \`nomic-embed-text\` (or equivalent) for generating document and query embeddings.
@@ -206,9 +221,9 @@ Must have (MVP)
 ## README Section
 Backlog & Priorities → Must have (MVP)" \
   "must-have")
-add_to_project "$node_id" "Must have"
+add_to_project "${issue_info%%:*}" "$MUST_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Add multilingual baseline (EN + NO + AM) via translation or prompting" \
   "## Description
 Enable the assistant to accept questions in English, Norwegian, and Amharic and respond in the user's language. Implement either a translation layer or language-specific system prompts.
@@ -225,9 +240,9 @@ Must have (MVP)
 ## README Section
 Backlog & Priorities → Must have (MVP)" \
   "must-have")
-add_to_project "$node_id" "Must have"
+add_to_project "${issue_info%%:*}" "$MUST_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Add basic logging, error handling, and health endpoint" \
   "## Description
 Establish consistent structured logging (request ID, session ID, selected domain) and global error handling so failures return informative responses rather than stack traces.
@@ -244,9 +259,9 @@ Must have (MVP)
 ## README Section
 Backlog & Priorities → Must have (MVP)" \
   "must-have")
-add_to_project "$node_id" "Must have"
+add_to_project "${issue_info%%:*}" "$MUST_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Write minimal unit tests for router and prompt builder" \
   "## Description
 Cover the domain router and prompt composition logic with unit tests to catch regressions and establish a test baseline before expanding coverage.
@@ -263,11 +278,11 @@ Must have (MVP)
 ## README Section
 Backlog & Priorities → Must have (MVP)" \
   "must-have")
-add_to_project "$node_id" "Must have"
+add_to_project "${issue_info%%:*}" "$MUST_HAVE_OPTION_ID"
 
 # --- Should have (after MVP) --------------------------------------------------
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Add streaming responses via Server-Sent Events (SSE)" \
   "## Description
 Stream LLM tokens to the client in real time using Server-Sent Events so users see the answer being composed rather than waiting for the full response.
@@ -284,9 +299,9 @@ Should have
 ## README Section
 Backlog & Priorities → Should have (after MVP)" \
   "should-have")
-add_to_project "$node_id" "Should have"
+add_to_project "${issue_info%%:*}" "$SHOULD_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Include source citations for retrieved documents" \
   "## Description
 Expose the document chunks used in each RAG retrieval step alongside the answer so users can verify the sources of government guidance.
@@ -303,9 +318,9 @@ Should have
 ## README Section
 Backlog & Priorities → Should have (after MVP)" \
   "should-have")
-add_to_project "$node_id" "Should have"
+add_to_project "${issue_info%%:*}" "$SHOULD_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Implement admin ingestion endpoint and document pipeline" \
   "## Description
 Provide a secured \`POST /api/admin/ingest\` endpoint and accompanying documentation so authorised administrators can add or update documents in the vector store without redeploying.
@@ -322,9 +337,9 @@ Should have
 ## README Section
 Backlog & Priorities → Should have (after MVP)" \
   "should-have")
-add_to_project "$node_id" "Should have"
+add_to_project "${issue_info%%:*}" "$SHOULD_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Add OpenAPI / Swagger documentation" \
   "## Description
 Generate interactive API documentation via SpringDoc OpenAPI so developers and integrators can explore and test all endpoints without reading the source code.
@@ -341,9 +356,9 @@ Should have
 ## README Section
 Backlog & Priorities → Should have (after MVP)" \
   "should-have")
-add_to_project "$node_id" "Should have"
+add_to_project "${issue_info%%:*}" "$SHOULD_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Add Docker and Docker Compose for the full local stack" \
   "## Description
 Package the backend in a Dockerfile and provide a Docker Compose file that brings up the backend and Ollama together so developers can run the full stack with a single command.
@@ -360,9 +375,9 @@ Should have
 ## README Section
 Backlog & Priorities → Should have (after MVP)" \
   "should-have")
-add_to_project "$node_id" "Should have"
+add_to_project "${issue_info%%:*}" "$SHOULD_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Set up CI pipeline with GitHub Actions" \
   "## Description
 Automate build verification, unit test execution, and code formatting checks on every push and pull request using GitHub Actions.
@@ -379,11 +394,11 @@ Should have
 ## README Section
 Backlog & Priorities → Should have (after MVP)" \
   "should-have")
-add_to_project "$node_id" "Should have"
+add_to_project "${issue_info%%:*}" "$SHOULD_HAVE_OPTION_ID"
 
 # --- Frontend (Should have) ---------------------------------------------------
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Scaffold Next.js (App Router) + TypeScript frontend" \
   "## Description
 Bootstrap the frontend project using Next.js with the App Router and TypeScript so all subsequent UI work has a consistent, typed foundation.
@@ -400,9 +415,9 @@ Should have
 ## README Section
 Backlog & Priorities → Frontend (Should have)" \
   "should-have")
-add_to_project "$node_id" "Should have"
+add_to_project "${issue_info%%:*}" "$SHOULD_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Build chat UI with conversation list and session switching" \
   "## Description
 Implement the core chat interface: a message thread pane and a sidebar listing past sessions, allowing users to start new conversations or revisit existing ones.
@@ -419,9 +434,9 @@ Should have
 ## README Section
 Backlog & Priorities → Frontend (Should have)" \
   "should-have")
-add_to_project "$node_id" "Should have"
+add_to_project "${issue_info%%:*}" "$SHOULD_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Implement SSE client for streaming token responses" \
   "## Description
 Wire the frontend to consume the backend's Server-Sent Events stream so tokens appear in real time rather than after the full response has been generated.
@@ -438,9 +453,9 @@ Should have
 ## README Section
 Backlog & Priorities → Frontend (Should have)" \
   "should-have")
-add_to_project "$node_id" "Should have"
+add_to_project "${issue_info%%:*}" "$SHOULD_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Integrate Zustand state management and React Query data fetching" \
   "## Description
 Establish the frontend state architecture using Zustand for global UI state (active session, settings) and React Query for server state and API interactions.
@@ -457,9 +472,9 @@ Should have
 ## README Section
 Backlog & Priorities → Frontend (Should have)" \
   "should-have")
-add_to_project "$node_id" "Should have"
+add_to_project "${issue_info%%:*}" "$SHOULD_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Add language selector and i18n wiring (EN/NO/AM) with persisted preference" \
   "## Description
 Allow users to choose their preferred language (English, Norwegian, Amharic) from the UI; persist the preference across sessions and pass it to the API on every request.
@@ -476,9 +491,9 @@ Should have
 ## README Section
 Backlog & Priorities → Frontend (Should have)" \
   "should-have")
-add_to_project "$node_id" "Should have"
+add_to_project "${issue_info%%:*}" "$SHOULD_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Add message actions: copy, regenerate, and thumbs-up/down feedback" \
   "## Description
 Surface per-message action buttons so users can copy answers to clipboard, request a regenerated response, or submit quick thumbs-up / thumbs-down feedback.
@@ -495,9 +510,9 @@ Should have
 ## README Section
 Backlog & Priorities → Frontend (Should have)" \
   "should-have")
-add_to_project "$node_id" "Should have"
+add_to_project "${issue_info%%:*}" "$SHOULD_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Build Sources / citations drawer per assistant message" \
   "## Description
 Display the RAG source documents used to generate each answer in an expandable drawer so users can verify guidance against official government sources.
@@ -514,9 +529,9 @@ Should have
 ## README Section
 Backlog & Priorities → Frontend (Should have)" \
   "should-have")
-add_to_project "$node_id" "Should have"
+add_to_project "${issue_info%%:*}" "$SHOULD_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Implement error handling UX (timeouts, offline, model errors) with retry" \
   "## Description
 Provide clear, actionable error states for network failures, model unavailability, and request timeouts so users are never left with a blank or broken interface.
@@ -533,9 +548,9 @@ Should have
 ## README Section
 Backlog & Priorities → Frontend (Should have)" \
   "should-have")
-add_to_project "$node_id" "Should have"
+add_to_project "${issue_info%%:*}" "$SHOULD_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Perform basic accessibility pass (keyboard navigation, focus states, ARIA)" \
   "## Description
 Audit the chat UI for accessibility issues and implement fixes: ensure all interactive elements are reachable by keyboard, have visible focus styles, and include appropriate ARIA labels.
@@ -552,9 +567,9 @@ Should have
 ## README Section
 Backlog & Priorities → Frontend (Should have)" \
   "should-have")
-add_to_project "$node_id" "Should have"
+add_to_project "${issue_info%%:*}" "$SHOULD_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Implement responsive mobile-first layout with Tailwind (chat + sidebar)" \
   "## Description
 Style the chat interface and session sidebar using Tailwind CSS with a mobile-first approach so the app is fully usable on small screens and scales gracefully to desktop.
@@ -571,9 +586,9 @@ Should have
 ## README Section
 Backlog & Priorities → Frontend (Should have)" \
   "should-have")
-add_to_project "$node_id" "Should have"
+add_to_project "${issue_info%%:*}" "$SHOULD_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Document frontend configuration (NEXT_PUBLIC_API_BASE_URL, etc.)" \
   "## Description
 Write clear documentation for all frontend environment variables and configuration options so developers can set up the frontend against any backend instance quickly.
@@ -590,11 +605,11 @@ Should have
 ## README Section
 Backlog & Priorities → Frontend (Should have)" \
   "should-have")
-add_to_project "$node_id" "Should have"
+add_to_project "${issue_info%%:*}" "$SHOULD_HAVE_OPTION_ID"
 
 # --- Nice to have (production readiness) ------------------------------------
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Implement role-based access control for admin ingestion" \
   "## Description
 Protect the admin ingestion endpoint with role-based access control so only authorised users can add or update documents in the vector store.
@@ -611,9 +626,9 @@ Nice to have
 ## README Section
 Backlog & Priorities → Nice to have (production readiness)" \
   "nice-to-have")
-add_to_project "$node_id" "Nice to have"
+add_to_project "${issue_info%%:*}" "$NICE_TO_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Build feedback capture and evaluation loop" \
   "## Description
 Capture thumbs-up / thumbs-down ratings and optional comments from users and store them for offline review, enabling iterative improvement of prompts and the document corpus.
@@ -630,9 +645,9 @@ Nice to have
 ## README Section
 Backlog & Priorities → Nice to have (production readiness)" \
   "nice-to-have")
-add_to_project "$node_id" "Nice to have"
+add_to_project "${issue_info%%:*}" "$NICE_TO_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Add PII detection and redaction" \
   "## Description
 Detect and redact personally identifiable information (names, national ID numbers, addresses) from user messages before they are sent to the LLM or logged, reducing privacy risk.
@@ -649,9 +664,9 @@ Nice to have
 ## README Section
 Backlog & Priorities → Nice to have (production readiness)" \
   "nice-to-have")
-add_to_project "$node_id" "Nice to have"
+add_to_project "${issue_info%%:*}" "$NICE_TO_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Add observability: metrics and distributed tracing" \
   "## Description
 Instrument the backend with Prometheus metrics and distributed tracing (e.g., OpenTelemetry) so the system's performance and error rates can be monitored in production.
@@ -668,9 +683,9 @@ Nice to have
 ## README Section
 Backlog & Priorities → Nice to have (production readiness)" \
   "nice-to-have")
-add_to_project "$node_id" "Nice to have"
+add_to_project "${issue_info%%:*}" "$NICE_TO_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Create cloud deployment templates (Azure Container Apps / AKS)" \
   "## Description
 Provide infrastructure-as-code templates (ARM, Bicep, or Terraform) for deploying the stack to Azure Container Apps or AKS, enabling scalable cloud deployment when needed.
@@ -687,9 +702,9 @@ Nice to have
 ## README Section
 Backlog & Priorities → Nice to have (production readiness)" \
   "nice-to-have")
-add_to_project "$node_id" "Nice to have"
+add_to_project "${issue_info%%:*}" "$NICE_TO_HAVE_OPTION_ID"
 
-node_id=$(create_issue \
+issue_info=$(create_issue \
   "Expand domain coverage and enrich agent tooling (forms, calculators, checklists)" \
   "## Description
 Broaden the assistant's usefulness by adding more government service domains and richer agent capabilities such as interactive forms, eligibility calculators, and step-by-step checklists.
@@ -706,9 +721,9 @@ Nice to have
 ## README Section
 Backlog & Priorities → Nice to have (production readiness)" \
   "nice-to-have")
-add_to_project "$node_id" "Nice to have"
+add_to_project "${issue_info%%:*}" "$NICE_TO_HAVE_OPTION_ID"
 
 echo ""
 echo "==> Done! Issues created and added to project."
 echo "    Project: $PROJECT_URL"
-echo "    Total issues: 25"
+echo "    Total issues: 30"

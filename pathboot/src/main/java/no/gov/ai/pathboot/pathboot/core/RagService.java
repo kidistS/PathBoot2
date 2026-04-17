@@ -52,7 +52,15 @@ public class RagService {
 
         return KNOWLEDGE_BASE.stream()
                 .filter(doc -> doc.domain() == domain || doc.domain() == GovDomain.GENERAL)
-                .map(doc -> new RetrievedDocument(doc.domain(), doc.title(), doc.content(), doc.sourceUrl(), score(queryTokens, doc.content())))
+                .map(doc ->
+                        new RetrievedDocument(
+                                doc.domain(),
+                                doc.title(),
+                                doc.content(),
+                                doc.sourceUrl(),
+                                score(queryTokens, doc.content())
+                        )
+                )
                 .sorted(Comparator.comparingDouble(RetrievedDocument::score).reversed())
                 .limit(topK)
                 .collect(Collectors.toList());
